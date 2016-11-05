@@ -83,7 +83,7 @@ dropColsFT <- names(appDataTfm) %in% c("partitionKey", "timestamp",
 appDataTfm <- appDataTfm[!dropColsFT]
 
 #### Sorting data frame ---------------------------
-## Here we first arrange the columns and sort them by memberNumber and transactionTime.
+## We will first arrange the columns and sort them by memberNumber and transactionTime.
 ## This is because memberNumber and transactionDtTime form a unique transaction.
 appDataTfm <-
     appDataTfm %>% 
@@ -93,15 +93,15 @@ appDataTfm <-
                   arrange(memberNumber, transactionDtTime)
 
 #### Creating session master ---------------------------
-## Here we create a dataset called as sessionMaster.
+## In this section we create a dataset called as sessionMaster.
 ## Session is defined as the series of transactions that occur continiously
 ## such that the time difference between a given transaction and the previous one is
 ## less than 10mins.
 ## Session master is the first transaction that occurs in a given set.
 ## The following is the strategy we use to create a Session master:
-##      1. Sort and group each transaction by member, transaction date and hour.
-##      2. Find the minutes difference between a given transaction and the last one.
-##      3. If the difference is greater than 10 then it is considered to be new transaction.
+##      1.  Sort and group each transaction by member, transaction date and hour.
+##      2.  Find the minutes difference between a given transaction and the last one.
+##      3.  If the difference is greater than 10 then it is considered to be new transaction.
 
 sessionMaster <- 
     appDataTfm %>% 
@@ -121,12 +121,13 @@ sessionMaster <-
     as.data.frame()
 
 #### Tagging session ids to transactions ---------------------------
-## Here tag each transaction with a session id. Following is the strategy we will employ:
-##      1. Create sequence of session ids for each row in session master.
-##      2. Join app data with session master based on member, transaction time details.
-##      3. Step 2 will result in data frame that has all the masters tagged with session ids.
-##         The child sessions will be NA.    
-##      4. Use a function replaceNA that will replace all the child sessions with the previous
+## In this section, we tag each transaction with a session id. 
+## Following is the strategy we will employ:
+##      1.  Create sequence of session ids for each row in session master.
+##      2.  Join app data with session master based on member, transaction time details.
+##      3.  Step 2 will result in data frame that has all the masters tagged with session ids.
+##          The child sessions will be NA.    
+##      4.  Use a function replaceNA that will replace all the child sessions with the previous
 ##         session ids i.e. id of the parent session.    
 
 # Creating session id for master
@@ -137,6 +138,7 @@ head(sessionMaster)
 # Tagging session ids to transactions
 appDataTfm <- 
         # Join with transaction and create sessionIds
+    
         left_join(appDataTfm, sessionMaster, 
               by = c("memberNumber", "transactionDtTime", "transactionDt",
                      "transactionHr", "transactionMin"),
@@ -146,6 +148,7 @@ appDataTfm <-
            type:appVersion, customerNumber:languageCode) %>%
     # replace all the child sessions with the previous session ids i.e. id of the 
     # parent session.
+    
     mutate(sessionId = replaceNA(sessionId)) %>%
      select(memberNumber,transactionDtTime, sessionId,
             transactionDt, transactionHr, transactionMin, action, name,
@@ -154,6 +157,16 @@ appDataTfm <-
 ```
 
 ```{r Reshaping Data}
+## Here we will reshape the data such that interaction for each screen is recorded. 
+## This operation will result in new data frame.
+## The strategy we will use is as follows:
+##      1.  Select key dimensions for which we want to do analysis.
+##      2.  Based on those dimensions, pivot the count of transactions based
+##          on the screen name.
+##      3.  The resultant will have columns(features) for each screen with the 
+##          count of interaction for that screen.    
+
+
 str(appDataTfm)
 appDataPivot <-
     appDataTfm %>%
@@ -162,25 +175,35 @@ appDataPivot <-
     group_by(memberNumber, sessionId, transactionDt, transactionHr, transactionMin, 
              screenName, longitude, latitude) %>%
     summarise(count = n()) %>%
-    dcast(memberNumber + sessionId + transactionDt + transactionHr + transactionMin +
+    # pivot the data
+    
+    reshape2::dcast(memberNumber + sessionId + transactionDt + transactionHr + transactionMin +
           longitude + latitude
           ~ screenName)
+# All the values with NULL values need to be substituted with 0
 
 appDataPivot[is.na(appDataPivot)] <- 0
 
-str(appDataPivot)
+# Calculate the total number of transactions for each row by adding a total column
+
 appDataPivot <- 
     appDataPivot %>%
     mutate(total = rowSums(appDataPivot[,c(8:ncol(appDataPivot))]))
 
 ```
+### Exporting Data
 
-```{r Exporting Data}
+```{r Export to csv}
+## In this section we will export the dataframes into csv files.
+## We will export following dataframes:
+##  1.  appDataTfm that contains the raw data with feature engineered columns.  
+##  2.  appDataPivot that containts pivoted data.
+## These dataframes will be further used in Power BI for visualization. 
 exportPath <- paste0(getwd(),"/01.Data")
 write.table(appDataTfm, paste0(exportPath, "/appDataTfm.csv"), sep = ",", 
             row.names = F)
             
-write.table(appDataTfm, paste0(exportPath, "/appDataPivot.csv"), sep = ",", 
+write.table(appDataPivot, paste0(exportPath, "/appDataPivot.csv"), sep = ",", 
             row.names = F)
 ```
 
