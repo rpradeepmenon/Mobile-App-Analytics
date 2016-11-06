@@ -1,5 +1,5 @@
 ---
-title: "Mobile App Analytics Data Preparation"
+title: "Mobile App Analytics ETL"
 author: "Pradeep Menon"
 date: "04/11/2016"
 output: html_document
@@ -9,7 +9,7 @@ We will load utilities file that contains functions that will be used for
 various actions and processing.
 ```{r Load Contents}
 ### Load Util Files -------------------
-utilFileName <- paste0(getwd(), "/02.UtilFunctions/utilFunctions.R")
+utilFileName <- paste0(getwd(), "/02.RProgram/utilFunctions.R")
 # Extract the functions from the util file.
 source(utilFileName)
 
@@ -157,6 +157,7 @@ appDataTfm <-
 ```
 
 ```{r Reshaping Data}
+#### Reshaping Data -----------------------
 ## Here we will reshape the data such that interaction for each screen is recorded. 
 ## This operation will result in new data frame.
 ## The strategy we will use is as follows:
