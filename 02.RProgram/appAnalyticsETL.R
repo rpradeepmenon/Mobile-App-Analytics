@@ -23,7 +23,9 @@ packages <- c("dplyr",
               "rvest",
               "jsonlite",
               "data.table",
-              "reshape2")
+              "reshape2",
+              "RJDBC",
+              "RODBC")
 
 # Calls the function that installs the required package if not installed and
 # loads the packages.
@@ -37,11 +39,12 @@ dataFilePath <- paste0(getwd(), "/01.Data")
 
 # Construct the full path to the filename.
 
-dataFileName <- paste0(dataFilePath, "/analytics.logs.28-Oct.json")
+dataFileName <- paste0(dataFilePath, "/ActivityLog_Latest.json")
+#dataFileName <- paste0(dataFilePath, "/analytics.logs.28-Oct")
 
-appData <- fromJSON(dataFileName) # load data
-
-
+appData <- jsonlite::fromJSON(dataFileName) # load data
+str(appData)
+dim(appData)
 
 #### Column cleansing ####
 # We will only use columns that have some analytic value and can be used for
@@ -74,6 +77,7 @@ appDataTfm <-
             strftime(as.POSIXct(timestamp,
                                 origin = "1970-01-01"),
                      format = "%H:%M:%S")
+
         ))
     ) %>%
     mutate(
@@ -85,68 +89,69 @@ appDataTfm <-
 dropColsFT <- names(appDataTfm) %in% c("partitionKey", "timestamp",
                                        "transactionTime")
 appDataTfm <- appDataTfm[!dropColsFT]
-
+str(appDataTfm)
+head(appDataTfm)
 #### Sorting data frame ---------------------------
 ## We will first arrange the columns and sort them by memberNumber
 ## and transactionTime.
 ## This is because memberNumber and transactionDtTime form a unique transaction.
-appDataTfm <-
-    appDataTfm %>%
-    select(
-        memberNumber,
-        transactionDtTime,
-        transactionDt,
-        transactionHr,
-        transactionMin,
-        action,
-        name,
-        type:appVersion,
-        customerNumber:languageCode
-    ) %>%
-    arrange(memberNumber, transactionDtTime)
+    appDataTfm <-
+        appDataTfm %>%
+        select(
+            memberNumber,
+            transactionDtTime,
+            transactionDt,
+            transactionHr,
+            transactionMin,
+            action,
+            name,
+            type:appVersion,
+            customerNumber:languageCode
+        ) %>%
+        arrange(memberNumber, transactionDtTime)
 
-#### Creating session master ---------------------------
-## In this section we create a dataset called as sessionMaster.
-## Session is defined as the series of transactions that occur continiously
-## such that the time difference between a given transaction and the previous one is
-## less than 10mins.
-## Session master is the first transaction that occurs in a given set.
-## The following is the strategy we use to create a Session master:
-##      1.  Sort and group each transaction by member, transaction date and hour.
-##      2.  Find the minutes difference between a given transaction and the last one.
-##      3.  If the difference is greater than 10 then it is considered to be new
-##          transaction.
+    #### Creating session master ---------------------------
+    ## In this section we create a dataset called as sessionMaster.
+    ## Session is defined as the series of transactions that occur continiously
+    ## such that the time difference between a given transaction and the previous one is
+    ## less than 10mins.
+    ## Session master is the first transaction that occurs in a given set.
+    ## The following is the strategy we use to create a Session master:
+    ##      1.  Sort and group each transaction by member, transaction date and hour.
+    ##      2.  Find the minutes difference between a given transaction and the last one.
+    ##      3.  If the difference is greater than 10 then it is considered to be new
+    ##          transaction.
 
-sessionMaster <-
-    appDataTfm %>%
-    select(
-        memberNumber,
-        transactionDtTime,
-        transactionDt,
-        transactionHr,
-        transactionMin,
-        action,
-        name
-    ) %>%
-    arrange(memberNumber, transactionDt, transactionHr, transactionMin) %>%
-    group_by(memberNumber, transactionDt, transactionHr) %>%
-    mutate(lastmin = lag(transactionMin),
-           diffmin = ifelse(is.na(lag(transactionMin) - transactionMin), 0,
-                            (transactionMin - lag(transactionMin)))) %>%
-    mutate(isSessionMast = ifelse((is.na(lastmin)  &
-                                       diffmin == 0), 1,
-                                  ifelse(diffmin > 10, 1, 0))) %>%
-    filter(isSessionMast == 1) %>%
-    select(memberNumber,
-           transactionDtTime,
-           transactionDt,
-           transactionHr,
-           transactionMin) %>%
-    as.data.frame()
+    sessionMaster <-
+        appDataTfm %>%
+        select(
+            memberNumber,
+            transactionDtTime,
+            transactionDt,
+            transactionHr,
+            transactionMin,
+            action,
+            name
+        ) %>%
+        arrange(memberNumber, transactionDt, transactionHr, transactionMin) %>%
+        group_by(memberNumber, transactionDt, transactionHr) %>%
+        mutate(lastmin = lag(transactionMin),
+               diffmin = ifelse(is.na(lag(transactionMin) - transactionMin), 0,
+                                (transactionMin - lag(transactionMin)))) %>%
+        mutate(isSessionMast = ifelse((is.na(lastmin)  &
+                                           diffmin == 0), 1,
+                                      ifelse(diffmin > 10, 1, 0))) %>% 
+        filter(isSessionMast == 1) %>%
+        select(memberNumber,
+               transactionDtTime,
+               transactionDt,
+               transactionHr,
+               transactionMin) %>%
+        as.data.frame()
 
-#### Tagging session ids to transactions ---------------------------
-## In this section, we tag each transaction with a session id.
-## Following is the strategy we will employ:
+    #### Tagging session ids to transactions ---------------------------
+    ## In this section, we tag each transaction with a session id.
+    ## Following is the strategy we will employ:
 ##      1.  Create sequence of session ids for each row in session master.
 ##      2.  Join app data with session master based on member, transaction time
 ##          details.
@@ -209,56 +214,39 @@ appDataTfm <-
 
 
 #### Reshaping Data -----------------------
-## Here we will reshape the data such that interaction for each screen is recorded.
+## Here we will reshape the data such that interaction for each screen is recorded. 
 ## This operation will result in new data frame.
 ## The strategy we will use is as follows:
 ##      1.  Select key dimensions for which we want to do analysis.
 ##      2.  Based on those dimensions, pivot the count of transactions based
 ##          on the screen name.
-##      3.  The resultant will have columns(features) for each screen with the
-##          count of interaction for that screen.
-
+##      3.  The resultant will have columns(features) for each screen with the 
+##          count of interaction for that screen.    
 
 str(appDataTfm)
 appDataPivot <-
     appDataTfm %>%
-    select(
-        memberNumber,
-        sessionId,
-        transactionDt,
-        transactionHr,
-        transactionMin,
-        screenName,
-        longitude,
-        latitude
-    ) %>%
-    group_by(
-        memberNumber,
-        sessionId,
-        transactionDt,
-        transactionHr,
-        transactionMin,
-        screenName,
-        longitude,
-        latitude
-    ) %>%
+    select(memberNumber, sessionId, transactionDt, transactionHr, transactionMin, 
+           screenName, longitude, latitude, countryCode) %>%
+    group_by(memberNumber, sessionId, transactionDt, transactionHr, transactionMin, 
+             screenName, longitude, latitude, countryCode) %>%
     summarise(count = n()) %>%
     # pivot the data
     
-    reshape2::dcast(
-        memberNumber + sessionId + transactionDt + transactionHr +
-            transactionMin + longitude + latitude ~ screenName
-    )
+    reshape2::dcast(memberNumber + sessionId + transactionDt + transactionHr + 
+                        transactionMin + longitude + latitude + countryCode
+                    ~  screenName)
+                    
 # All the values with NULL values need to be substituted with 0
 
 appDataPivot[is.na(appDataPivot)] <- 0
-
+str(appDataPivot)
 # Calculate the total number of transactions for each row by adding a total column
 
-appDataPivot <-
+appDataPivot <- 
     appDataPivot %>%
-    mutate(total = rowSums(appDataPivot[, c(8:ncol(appDataPivot))]))
-
+    mutate(total = rowSums(appDataPivot[,c(9:ncol(appDataPivot))]))
+str(appDataPivot)
 #### Export Data -----------------
 ## In this section we will export the dataframes into csv files.
 ## We will export following dataframes:
@@ -279,3 +267,18 @@ write.table(
     sep = ",",
     row.names = F
 )
+
+# Using JDBC Mac
+drv <- JDBC("com.microsoft.sqlserver.jdbc.SQLServerDriver",
+             "/Users/rpm/Desktop/Dropbox/drivers/sqljdbc_3-1.0/enu/sqljdbc4.jar") 
+
+# Using JDBC Windows
+drv <- JDBC("com.microsoft.sqlserver.jdbc.SQLServerDriver",
+            "C:/Users/prmen/Dropbox/drivers/sqljdbc_3-1.0/enu/sqljdbc4.jar") 
+
+jconn <- dbConnect(drv,
+                   "jdbc:sqlserver://xxxxx;databaseName = xxxx",
+                   "xxxxx",
+                   "xxxxx")
+
+dbWriteTable(conn = jconn, value = appDataPivot, name = "appDataPivot")
